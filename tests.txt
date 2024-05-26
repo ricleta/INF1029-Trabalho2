@@ -1,0 +1,2 @@
+./matrix_lib_test 2 400 800 800 400 matrixes/matrix_400x800 matrixes/matrix_800x400 results/res1 results/res2 256 4096
+./matrix_lib_test 2 800 1600 1600 800 matrixes/matrix_800x1600 matrixes/matrix_1600x800 results/res1 results/res2 256 4096
