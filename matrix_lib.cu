@@ -11,37 +11,52 @@
 #define THREADS_PER_BLOCK 256
 #define MAX_BLOCKS_PER_GRID 4096
 
-__global__ void aux_matrix_matrix_mult(int a_height, int b_height, int b_width, int c_width, float *a_rows_d, float *b_rows_d, float *c_rows_d)
+__global__ void aux_matrix_matrix_mult(int a_height, int b_height, int c_width, float *a_rows_d, float *b_rows_d, float *c_rows_d)
 {
     // int n_threads = gridDim.x * blockDim.x;                // number of threads created
-    int thread_id = blockIdx.x * blockDim.x + threadIdx.x; // number of thread
+    // int thread_id = blockIdx.x * blockDim.x + threadIdx.x; // number of thread
     // int threads_per_block = blockDim.x;
     // int total_threads = gridDim.x * threads_per_block;
-    // int elements_per_thread = (a_height * b_width) / total_threads; // Adjust based on workload preferences
+    // int elements_per_thread = ((a_height * c_width) + n_threads - 1)/ total_threads; // Adjust based on workload preferences
 
-    int iniA = a_height * thread_id;
+    // int iniA = thread_id * elements_per_thread;
 
-    float *iniB = b_rows_d;
-    float *iniC = c_rows_d;
-    float *iterA = a_rows_d + iniA;
-    float *iterB = b_rows_d;
-    float *iterC = c_rows_d;
+    // float *iniB = b_rows_d;
+    // float *iniC = c_rows_d;
+    // float *iterA = a_rows_d + iniA;
+    // float *iterB = b_rows_d;
+    // float *iterC = c_rows_d + iniA * c_width;
 
-    // int i = thread_id * elements_per_thread; i < min((thread_id + 1) * elements_per_thread, a_height); i++
-    for (int i = iniA; i < a_height; i++)
+    // // int i = thread_id * elements_per_thread; i < min((thread_id + 1) * elements_per_thread, a_height); i++
+    // for (int i = 0; i < elements_per_thread; i++)
+    // {
+    //     iterB = iniB;
+
+    //     if (iniA + i < a_height)
+    //     {
+    //         for (int j = 0; j < b_height; j++)
+    //         {
+    //             iterC = iniC + i * c_width;
+
+    //             for (int k = 0; k < c_width; k++)
+    //             {
+    //                 *iterC++ += *iterB++ * *iterA;
+    //             }
+
+    //             iterA += a_height;
+    //         }
+    //     }
+    // }
+
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
+    int stride = blockDim.x * gridDim.x;
+    int i, j;
+
+    for (i = index; i < a_height * c_width; i += stride) 
     {
-        iterB = iniB;
-
-        for (int j = 0; j < b_height; j++)
+        for (j = 0; j < b_height; j++) 
         {
-            iterC = iniC + i * c_width;
-
-            for (int k = 0; k < c_width; k++)
-            {
-                *iterC++ += *iterB++ * *iterA;
-            }
-
-            iterA++;
+           c_rows_d[i] += a_rows_d[j + (i / c_width * b_height)] * b_rows_d[j * a_height + i % c_width];
         }
     }
 }
@@ -62,7 +77,6 @@ int matrix_matrix_mult(struct matrix *a, struct matrix *b, struct matrix *c)
     int b_size = b->height * b->width;
     int c_size = c->height * c->width;
     
-    printf("a_size = %d; b_size = %d; c_size = %d\n", a_size, b_size, c_size);
     cudaError_t cudaError;
 
     cudaError = cudaMalloc(&a_rows_d, a_size * sizeof(float));
@@ -93,29 +107,24 @@ int matrix_matrix_mult(struct matrix *a, struct matrix *b, struct matrix *c)
     int blockSize = THREADS_PER_BLOCK;
     int numBlocks = (c_size + blockSize - 1) / blockSize;
 
-    printf("Num blocks matrix_matrix_mult = %d\n", numBlocks);
+    // printf("Num blocks matrix_matrix_mult = %d\n", numBlocks);
     if (numBlocks > MAX_BLOCKS_PER_GRID)
     {
         printf("Num blocks = %d\n", MAX_BLOCKS_PER_GRID);
         numBlocks = MAX_BLOCKS_PER_GRID;
     }
 
+    // int blockSize = 256;
+    // int numBlocks = 4096;
+    
     printf("Num blocks matrix_matrix_mult = %d\n", numBlocks);
     
-    aux_matrix_matrix_mult<<<numBlocks, blockSize>>>(a->height, b->height, b->width, c->width, a_rows_d, b_rows_d, c_rows_d);
+    aux_matrix_matrix_mult<<<numBlocks, blockSize>>>(a->height, b->height, c->width, a_rows_d, b_rows_d, c_rows_d);
 
     cudaDeviceSynchronize();
     
     cudaError = cudaMemcpy(c->rows, c_rows_d,  c_size * sizeof(float), cudaMemcpyDeviceToHost);
 
-    // for (int i = 0; i < c_size; i++) {
-    //     if (c->rows[i] != 0) {
-    //         int row = i / c->width;
-    //         int col = i % c->width;
-    //         printf("Element at index (%d, %d) is %f\n", row, col, c->rows[i]);
-    //     }
-    // }
-    
     if (cudaError != cudaSuccess)
     {
         fprintf(stderr, "cudaMemCpy device -> host returned error %s (code %d) line %d\n", cudaGetErrorString(cudaError), cudaError, __LINE__);
@@ -134,25 +143,28 @@ int matrix_matrix_mult(struct matrix *a, struct matrix *b, struct matrix *c)
     return 1;
 }
 
-// Funcao auxiliar para multiplicacao de matriz por escalar chamada pelas threads
-__global__ void aux_scalar_mult(float *rows, int height, int width, float scalar)
+// Funcao auxiliar para multiplicacao de matriz por escalar chamada pelos threads no caso do tamanho da matrix ser menor que on numero de threads
+__global__ void aux_scalar_mult(float *rows, int size, float scalar)
 {
     int n_threads = gridDim.x * blockDim.x;                // number of threads created
     int thread_id = blockIdx.x * blockDim.x + threadIdx.x; // number of thread
-    int matrix_size = height * width;
 
-    int qtd = (matrix_size + n_threads - 1) / n_threads;
+    int qtd = (size + n_threads - 1) / n_threads;
     int ini = qtd * thread_id;
 
-    // printf("n_threads = %d; qtd = %d; matrix_size = %d\n", n_threads, qtd, matrix_size);
+    // printf("n_threads = %d; qtd = %d; size = %d\n", n_threads, qtd, size);
 
     // Iterator depends on the thread running, adding ini indicates the appropriate start for the thread
     float *p = rows + ini;
 
-    // Perform scalar multiplication on the assigned portion of the matrix
-    for (int i = 0; i < qtd; i++)
+    // there might be more threads than needed, this ensures no illegal memory access
+    if (thread_id < size)
     {
-        *p++ *= scalar;        
+        // Perform scalar multiplication on the assigned portion of the matrix
+        for (int i = 0; i < qtd; i++)
+        {
+            *p++ *= scalar;        
+        }
     }
 }
 
@@ -162,49 +174,92 @@ int scalar_matrix_mult(float scalar_value, struct matrix *matrix)
     int matrix_size = matrix->height * matrix->width;
     cudaError_t cudaError;
 
-    cudaError = cudaMalloc(&device_temp, matrix_size * sizeof(float));
-
-    if (cudaError != cudaSuccess)
-    {
-        fprintf(stderr, "cudaMalloc returned error %s (code %d) \n", cudaGetErrorString(cudaError), cudaError);
-        exit(2);
-    }
-
-    cudaError = cudaMemcpy(device_temp, matrix->rows, matrix_size * sizeof(float), cudaMemcpyHostToDevice);
-    
-    if (cudaError != cudaSuccess)
-    {
-        fprintf(stderr, "cudaMemCpy matrix->rows -> device_temp returned error %s (code %d) line %d\n", cudaGetErrorString(cudaError), cudaError, __LINE__);
-        cudaFree(device_temp);
-        exit(3);
-    }
-
     int blockSize = THREADS_PER_BLOCK;
     int numBlocks = (matrix_size + blockSize - 1) / blockSize;
 
     printf("Num blocks = %d\n", numBlocks);
     if (numBlocks > MAX_BLOCKS_PER_GRID)
     {
-        printf("Num blocks = %d\n", MAX_BLOCKS_PER_GRID);
         numBlocks = MAX_BLOCKS_PER_GRID;
+        printf("Num blocks = %d\n", numBlocks);
     }
 
-    printf("Num blocks = %d\n", numBlocks);
-    
-    aux_scalar_mult<<<numBlocks, blockSize>>>(device_temp, matrix->height, matrix->width, scalar_value);
-
-    cudaDeviceSynchronize();
-    
-    cudaError = cudaMemcpy(matrix->rows, device_temp, matrix_size * sizeof(float), cudaMemcpyDeviceToHost);
-
-    if (cudaError != cudaSuccess)
+    if (numBlocks * blockSize < matrix_size)
     {
-        fprintf(stderr, "cudaMemCpy device_temp -> matrix->rows returned error %s (code %d) line %d\n", cudaGetErrorString(cudaError), cudaError, __LINE__);
-        cudaFree(device_temp);
-        exit(4);
-    }
+        printf("numBlocks * blockSize = %d\n", numBlocks * blockSize);
 
-    cudaFree(device_temp);
+        int part_size = matrix->width;
+        int n_parts = matrix->height;
+        cudaError = cudaMalloc(&device_temp, part_size * sizeof(float));
+
+        if (cudaError != cudaSuccess)
+        {
+            fprintf(stderr, "cudaMalloc returned error %s (code %d) \n", cudaGetErrorString(cudaError), cudaError);
+            exit(2);
+        }
+        
+        float *current = matrix->rows;
+        for (int i = 0; i < n_parts; i++, current+=part_size)
+        {
+            // printf("i = %d; n_parts = %d; part_size = %d; i * part_size = %d\n", i, n_parts, part_size, i * part_size);
+            cudaError = cudaMemcpy(device_temp, current, part_size * sizeof(float), cudaMemcpyHostToDevice);
+        
+            if (cudaError != cudaSuccess)
+            {
+                fprintf(stderr, "cudaMemCpy matrix->rows -> device_temp returned error %s (code %d) line %d\n", cudaGetErrorString(cudaError), cudaError, __LINE__);
+                cudaFree(device_temp);
+                exit(3);
+            }
+
+            aux_scalar_mult<<<numBlocks, blockSize>>>(device_temp, part_size, scalar_value);
+            cudaDeviceSynchronize();
+
+            cudaError = cudaMemcpy(current, device_temp, part_size * sizeof(float), cudaMemcpyDeviceToHost);
+
+            if (cudaError != cudaSuccess)
+            {
+                fprintf(stderr, "cudaMemCpy device_temp -> matrix->rows returned error %s (code %d) line %d\n", cudaGetErrorString(cudaError), cudaError, __LINE__);
+                cudaFree(device_temp);
+                exit(4);
+            }
+        }
+
+        cudaFree(device_temp);
+    }
+    else
+    {
+        cudaError = cudaMalloc(&device_temp, matrix_size * sizeof(float));
+
+        if (cudaError != cudaSuccess)
+        {
+            fprintf(stderr, "cudaMalloc returned error %s (code %d) \n", cudaGetErrorString(cudaError), cudaError);
+            exit(2);
+        }
+
+        cudaError = cudaMemcpy(device_temp, matrix->rows, matrix_size * sizeof(float), cudaMemcpyHostToDevice);
+        
+        if (cudaError != cudaSuccess)
+        {
+            fprintf(stderr, "cudaMemCpy matrix->rows -> device_temp returned error %s (code %d) line %d\n", cudaGetErrorString(cudaError), cudaError, __LINE__);
+            cudaFree(device_temp);
+            exit(3);
+        }
+
+        printf("numBlocks * blockSize = %d\n", numBlocks * blockSize);
+        aux_scalar_mult<<<numBlocks, blockSize>>>(device_temp, matrix_size, scalar_value);
+        cudaDeviceSynchronize();
+
+        cudaError = cudaMemcpy(matrix->rows, device_temp, matrix_size * sizeof(float), cudaMemcpyDeviceToHost);
+
+        if (cudaError != cudaSuccess)
+        {
+            fprintf(stderr, "cudaMemCpy device_temp -> matrix->rows returned error %s (code %d) line %d\n", cudaGetErrorString(cudaError), cudaError, __LINE__);
+            cudaFree(device_temp);
+            exit(4);
+        }
+
+        cudaFree(device_temp);
+    }
 
     return 1;
 }
