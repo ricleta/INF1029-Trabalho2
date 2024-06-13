@@ -13,50 +13,39 @@
 
 __global__ void aux_matrix_matrix_mult(int a_height, int b_height, int c_width, float *a_rows_d, float *b_rows_d, float *c_rows_d)
 {
-    // int n_threads = gridDim.x * blockDim.x;                // number of threads created
-    // int thread_id = blockIdx.x * blockDim.x + threadIdx.x; // number of thread
-    // int threads_per_block = blockDim.x;
-    // int total_threads = gridDim.x * threads_per_block;
-    // int elements_per_thread = ((a_height * c_width) + n_threads - 1)/ total_threads; // Adjust based on workload preferences
+    int thread_id = blockIdx.x * blockDim.x + threadIdx.x;
+    int n_threads = blockDim.x * gridDim.x;
 
-    // int iniA = thread_id * elements_per_thread;
+    int qtd = (a_height + n_threads - 1) / n_threads;
+    int n_linhas = qtd * thread_id;
 
-    // float *iniB = b_rows_d;
-    // float *iniC = c_rows_d;
-    // float *iterA = a_rows_d + iniA;
-    // float *iterB = b_rows_d;
-    // float *iterC = c_rows_d + iniA * c_width;
-
-    // // int i = thread_id * elements_per_thread; i < min((thread_id + 1) * elements_per_thread, a_height); i++
-    // for (int i = 0; i < elements_per_thread; i++)
-    // {
-    //     iterB = iniB;
-
-    //     if (iniA + i < a_height)
-    //     {
-    //         for (int j = 0; j < b_height; j++)
-    //         {
-    //             iterC = iniC + i * c_width;
-
-    //             for (int k = 0; k < c_width; k++)
-    //             {
-    //                 *iterC++ += *iterB++ * *iterA;
-    //             }
-
-    //             iterA += a_height;
-    //         }
-    //     }
-    // }
-
-    int index = blockIdx.x * blockDim.x + threadIdx.x;
-    int stride = blockDim.x * gridDim.x;
-    int i, j;
-
-    for (i = index; i < a_height * c_width; i += stride) 
+    for (int row = 0; row < qtd; row++)
     {
-        for (j = 0; j < b_height; j++) 
+        int a_index = (n_linhas + row) * b_height;
+        int c_index = (n_linhas + row) * c_width;
+
+        if (a_index <= a_height * b_height || c_index <= a_height * c_width)
         {
-           c_rows_d[i] += a_rows_d[j + (i / c_width * b_height)] * b_rows_d[j * a_height + i % c_width];
+            float *iterA = a_rows_d + a_index;
+            float *iterC = c_rows_d + c_index;
+
+            for (int j = 0; j < b_height; j++)
+            {
+                int b_index = j * c_width;
+
+                if (b_index <= b_height * c_width)
+                {
+                    float *iterB = b_rows_d + b_index;
+
+                    for (int k = 0; k < c_width; k++)
+                    {
+                        if (a_index + j <= a_height * b_height || c_index + k <= a_height * c_width)
+                        {
+                            iterC[k] += iterB[k] * iterA[j];
+                        }
+                    }
+                }
+            }
         }
     }
 }
